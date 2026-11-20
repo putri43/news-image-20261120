@@ -1,0 +1,14 @@
+# generated / local scratch
+font-test.png
+crop-*.png
+zoom-*.png
+*.log
+# dependencies
+node_modules/
+# os + editor droppings
+.DS_Store
+Thumbs.db
+*.swp
+# local secrets / env
+.env
+*.local
