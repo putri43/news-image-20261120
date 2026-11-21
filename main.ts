@@ -1,16 +1,25 @@
 // news-image-20261120 — "Friday 20 November 2026" front page generator.
 // Written fresh in-session. Node stdlib only. Deterministic + offline.
-// Renders a 1600x2000 newspaper front page with 44 real stories, all first
-// reported Fri 20 Nov 2026 (see research.md). Own PNG encoder, own 5x7 bitmap
-// font, own framebuffer rasterizer. No stock images: every illustration is
-// drawn procedurally with rect/line/circle/polygon primitives.
-import { writeFileSync, existsSync } from "node:fs";
+// Renders a 1600x2000 (logical) newspaper front page with 44 real stories,
+// all first reported Fri 20 Nov 2026 (see research.md). Own PNG encoder,
+// own 5x7 bitmap font, own framebuffer rasterizer. No stock images: every
+// illustration is drawn procedurally with rect/line/circle/polygon primitives.
+// Output is scaled to 819x1024 (largest 4:5 that fits the 1024x1024 gate)
+// and written to MAKEFUN_OUTPUT_DIR/entry.png (see the tail of this file).
+import { writeFileSync, mkdirSync } from "node:fs";
+import { join } from "node:path";
 import { createHash } from "node:crypto";
 import * as zlib from "node:zlib";
 
 // ---------------------------------------------------------------- framebuffer
+// Logical page size (layout coordinates stay in these units).
 const W = 1600, H = 2000;
-const fb = Buffer.alloc(W * H * 3);
+// Physical output: the competition caps the image at 1024x1024, so the page
+// renders into an 819x1024 framebuffer (largest 4:5 that fits). The drawing
+// primitives below scale every logical coordinate by S.
+const S = 819 / 1600;
+const PW = 819, PH = 1024;
+const fb = Buffer.alloc(PW * PH * 3);
 
 function rgb(hex) {
   return [parseInt(hex.slice(1, 3), 16), parseInt(hex.slice(3, 5), 16), parseInt(hex.slice(5, 7), 16)];
@@ -27,17 +36,21 @@ const GREY = rgb("#6b6558");
 const LGREY = rgb("#8a8378");
 
 function setPx(x, y, c) {
-  x = Math.round(x); y = Math.round(y);
-  if (x < 0 || y < 0 || x >= W || y >= H) return;
-  const o = (y * W + x) * 3;
+  x = Math.round(x * S); y = Math.round(y * S);
+  if (x < 0 || y < 0 || x >= PW || y >= PH) return;
+  const o = (y * PW + x) * 3;
   fb[o] = c[0]; fb[o + 1] = c[1]; fb[o + 2] = c[2];
 }
 function fillRect(x, y, w, h, c) {
-  x = Math.round(x); y = Math.round(y); w = Math.round(w); h = Math.round(h);
+  const ow = w, oh = h;
+  x = Math.round(x * S); y = Math.round(y * S);
+  w = Math.round(ow * S); h = Math.round(oh * S);
+  if (ow > 0 && w < 1) w = 1;
+  if (oh > 0 && h < 1) h = 1;
   const x0 = Math.max(0, x), y0 = Math.max(0, y);
-  const x1 = Math.min(W, x + w), y1 = Math.min(H, y + h);
+  const x1 = Math.min(PW, x + w), y1 = Math.min(PH, y + h);
   for (let yy = y0; yy < y1; yy++) {
-    let o = (yy * W + x0) * 3;
+    let o = (yy * PW + x0) * 3;
     for (let xx = x0; xx < x1; xx++) { fb[o] = c[0]; fb[o + 1] = c[1]; fb[o + 2] = c[2]; o += 3; }
   }
 }
@@ -109,13 +122,13 @@ function chunk(type, data) {
   return Buffer.concat([len, td, crc]);
 }
 function encodePNG() {
-  const raw = Buffer.alloc(H * (1 + W * 3));
-  for (let y = 0; y < H; y++) {
-    raw[y * (1 + W * 3)] = 0;
-    fb.copy(raw, y * (1 + W * 3) + 1, y * W * 3, (y + 1) * W * 3);
+  const raw = Buffer.alloc(PH * (1 + PW * 3));
+  for (let y = 0; y < PH; y++) {
+    raw[y * (1 + PW * 3)] = 0;
+    fb.copy(raw, y * (1 + PW * 3) + 1, y * PW * 3, (y + 1) * PW * 3);
   }
   const ihdr = Buffer.alloc(13);
-  ihdr.writeUInt32BE(W, 0); ihdr.writeUInt32BE(H, 4);
+  ihdr.writeUInt32BE(PW, 0); ihdr.writeUInt32BE(PH, 4);
   ihdr[8] = 8; ihdr[9] = 2; ihdr[10] = 0; ihdr[11] = 0; ihdr[12] = 0;
   return Buffer.concat([
     Buffer.from([0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a]),
@@ -700,15 +713,13 @@ function drawFontTest() {
   drawText("Masthead scale 6:", 36, y, 2, RED, true); y += 30;
   drawText("Friday 20 November 2026", 36, y, 6, INK, true);
 }
-const mode = process.argv[2] || "page";
-if (mode === "font-test") {
-  drawFontTest();
-  const png = encodePNG();
-  writeFileSync("font-test.png", png);
-  console.log("font-test.png", png.length, "bytes, sha256", createHash("sha256").update(png).digest("hex"));
-} else {
-  drawPage();
-  const png = encodePNG();
-  writeFileSync("front-page.png", png);
-  console.log("front-page.png", png.length, "bytes, sha256", createHash("sha256").update(png).digest("hex"));
-}
+// Grader contract: write the single entry image to MAKEFUN_OUTPUT_DIR/entry.png.
+// The repo is mounted read-only in the grader, so nothing may be written to a
+// relative path (the old front-page.png/font-test.png writes crashed exit 1).
+const outDir = process.env.MAKEFUN_OUTPUT_DIR || "./output";
+mkdirSync(outDir, { recursive: true });
+drawPage();
+const png = encodePNG();
+const outPath = join(outDir, "entry.png");
+writeFileSync(outPath, png);
+console.log(outPath, png.length, "bytes, sha256", createHash("sha256").update(png).digest("hex"));
